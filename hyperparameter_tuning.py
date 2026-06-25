@@ -343,21 +343,53 @@ def optuna_search(
 # =============================================================================
 
 if __name__ == "__main__":
+    import argparse
     import torch
-    from sklearn.datasets import make_classification
-    from sklearn.preprocessing import StandardScaler
-
-    # Generate sample data
-    X, y = make_classification(
-        n_samples=500, n_features=20, n_informative=15,
-        n_classes=3, n_clusters_per_class=2, random_state=42,
+    from data_loader import (
+        load_and_prepare_from_csv,
+        load_and_prepare_from_sql,
+        load_feature_config,
+        prepare_features,
     )
-    X = StandardScaler().fit_transform(X)
+    import pandas as pd
+
+    parser = argparse.ArgumentParser(description="Hyperparameter tuning for MLP")
+    parser.add_argument("--model", type=str, default="etac", choices=["etac", "dccs", "csdt"])
+    parser.add_argument("--data", type=str, default=None, help="CSV path")
+    parser.add_argument("--sql", type=str, default=None, help="SQL query")
+    parser.add_argument("--target", type=str, default="PREDICTION")
+    parser.add_argument("--method", type=str, default="random", choices=["grid", "random", "optuna"])
+    parser.add_argument("--trials", type=int, default=10)
+    parser.add_argument("--folds", type=int, default=3)
+    args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Load data using the server-side pattern
+    if args.sql is not None:
+        X, y, encoders, scaler, feature_names, df = load_and_prepare_from_sql(
+            query=args.sql, model_name=args.model, target_column=args.target,
+        )
+    elif args.data is not None:
+        X, y, encoders, scaler, feature_names, df = load_and_prepare_from_csv(
+            csv_path=args.data, model_name=args.model, target_column=args.target,
+        )
+    else:
+        # Fallback: synthetic data for demo
+        from sklearn.datasets import make_classification
+        from sklearn.preprocessing import StandardScaler as SC
+        print("No data source — using synthetic demo data")
+        X, y = make_classification(
+            n_samples=500, n_features=20, n_informative=15,
+            n_classes=3, n_clusters_per_class=2, random_state=42,
+        )
+        X = SC().fit_transform(X)
+
+    print(f"\nData: {X.shape[0]} samples, {X.shape[1]} features, {len(set(y))} classes")
+    print(f"Method: {args.method} | Trials: {args.trials} | Folds: {args.folds}")
+
     print("=" * 60)
-    print("RANDOM SEARCH (10 trials)")
+    print(f"{args.method.upper()} SEARCH ({args.trials} trials)")
     print("=" * 60)
     results = random_search(X, y, n_trials=10, n_folds=3, device=device)
 
