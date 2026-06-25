@@ -1,0 +1,119 @@
+{
+    "etac": {
+        "dummy_feature_columns": [
+            "COMMODITY_NAME", 
+            "SR_MANAGER_NAME", 
+            "Pri", "Tier", 
+            "FlightTest", 
+            "EngrRelECDCode", 
+            "ECDChangeCount_GT0", 
+            "ECDChangeCount_GT1", 
+            "ECDChangeCount_GT2", 
+            "ECDChangeCount_GT5", 
+            "ECDChangeCount_GT10", 
+            "OBDueChangeCount_GT0", 
+            "OBDueChangeCount_GT1", 
+            "OBDueChangeCount_GT2", 
+            "OBDueChangeCount_GT5", 
+            "OBDueChangeCount_GT10", 
+            "Customer", 
+            "CoordGrp", 
+            "Major_Model", 
+            "Model", 
+            "TOR", 
+            "ReqForTIA", 
+            "Month_Due", 
+            "Week_Due"
+        ], 
+        "additional_feature_columns": [
+            "IS_CERT", 
+            "IS_COMMITTED"
+        ], 
+        "published_columns": [
+            "ProjectID",
+            "RelRecNo",
+            "COMMODITY_NAME",
+            "PREDICTION",
+            "PredictionDate"
+        ]
+    }, 
+    "dccs": {
+        "dummy_feature_columns": [
+            "Assigned_To_Group", 
+            "Assigned_To_SubGroup", 
+            "Major_Model", 
+            "M/M_Change_Type", 
+            "M/M_Prime_Engineer_Name", 
+            "Month_Due"
+        ], 
+        "additional_feature_columns": [
+            "Routed_Late"
+        ],
+        "published_columns": [
+            "CHANGE_ID",
+            "Assigned_To_Group",
+            "Assigned_To_SubGroup",
+            "PREDICTION",
+            "PredictionDate"
+        ]
+    },
+    "csdt": {
+        "dummy_feature_columns": [
+            "IPT_NAME", 
+            "COMMODITY_NAME", 
+            "THREE_LETTER_CODE", 
+            "SUPPLIER_NAME", 
+            "SDRL_STATUS", 
+            "TYPE_OF_SUBMITTAL",
+            "DATA_ITEM",
+            "IsSCN",
+            "Is_SDT_Compliant"
+        ],
+        "additional_feature_columns": [
+            "DATA_ITEM_DESC_SCN",
+            "DATA_ITEM_DESC_LRU",
+            "DATA_ITEM_DESC_RAC",
+            "DATA_ITEM_DESC_ATP",
+            "DATA_ITEM_DESC_QTR",
+            "DATA_ITEM_DESC_QTP",
+            "DATA_ITEM_DESC_ECS",
+            "DATA_ITEM_DESC_Drawing",
+            "DATA_ITEM_DESC_Electrical",
+            "DATA_ITEM_DESC_Assembly_Drawing",
+            "DATA_ITEM_DESC_Outline_Drawing",
+            "DATA_ITEM_DESC_Assembly_Instructions",
+            "DATA_ITEM_DESC_BOM",
+            "DATA_ITEM_DESC_CERT",
+            "DATA_ITEM_DESC_CPL",
+            "DATA_ITEM_DESC_D6-36440",
+            "DATA_ITEM_DESC_D6-36230",
+            "DATA_ITEM_DESC_D6-82240",
+            "PROGRAMS_ALL",
+            "PROGRAMS_737",
+            "PROGRAMS_737-8",
+            "PROGRAMS_737-9",
+            "PROGRAMS_737-8MAX",
+            "PROGRAMS_737-MAX",
+            "PROGRAMS_737-NG",
+            "PROGRAMS_747",
+            "PROGRAMS_757",
+            "PROGRAMS_777",
+            "PROGRAMS_777-8F", 
+            "PROGRAMS_777-9", 
+            "PROGRAMS_787", 
+            "PROGRAMS_787-8", 
+            "PROGRAMS_787-9", 
+            "PROGRAMS_787-10", 
+            "IS_RESUBMIT_FOR_SDT", 
+            "IS_RETURNED_FOR_CORRECTION"
+    ],
+    "published_columns": [
+        "SDT_NUM",
+        "SDRL_ID",
+        "IPT_NAME",
+        "COMMODITY_NAME",
+        "PREDICTION",
+        "PredictionDate"
+    ]
+    }
+}
