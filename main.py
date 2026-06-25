@@ -3,12 +3,14 @@ Main Script — MLP Classification with Cross-Validation
 -------------------------------------------------------
 Adapts to features defined in feature_columns.json.
 Supports multiple model targets: etac, dccs, csdt.
+Supports loading from SQL Server or CSV (mirrors server-side pattern).
 
 Usage:
     python main.py --model etac --data path/to/data.csv
-    python main.py --model dccs --data path/to/data.csv
+    python main.py --model dccs --sql "SELECT * FROM vw_dccs_training"
     python main.py --model etac  (uses synthetic demo data)
 """
+from __future__ import annotations
 
 import json
 import numpy as np
@@ -20,6 +22,8 @@ from model import FlexibleMLP
 from train import cross_validate, train_model
 from data_loader import (
     load_feature_config,
+    load_and_prepare_from_sql,
+    load_and_prepare_from_csv,
     prepare_features,
     get_model_names,
     print_feature_summary,
@@ -29,18 +33,24 @@ from data_loader import (
 def main(
     model_name: str = "etac",
     data_path: str = None,
+    sql_query: str = None,
+    conn_str: str = None,
     config_path: str = "feature_columns.json",
     target_column: str = "PREDICTION",
 ):
     """
-    Run the full pipeline for a specific model target.
+    Run the full training pipeline for a specific model target.
 
     Parameters
     ----------
     model_name : str
         Which model to train: 'etac', 'dccs', or 'csdt'.
     data_path : str or None
-        Path to CSV data file. If None, generates synthetic demo data.
+        Path to CSV data file.
+    sql_query : str or None
+        SQL query to load training data from the server.
+    conn_str : str or None
+        Override connection string (otherwise built from .env).
     config_path : str
         Path to feature_columns.json.
     target_column : str
@@ -50,33 +60,46 @@ def main(
     print_feature_summary(model_name, config_path)
 
     # ------------------------------------------------------------------
-    # 1. Load data
+    # 1. Load and prepare data
     # ------------------------------------------------------------------
-    feature_config = load_feature_config(config_path)
-    model_cfg = feature_config[model_name]
-    dummy_columns = model_cfg["dummy_feature_columns"]
-    additional_columns = model_cfg["additional_feature_columns"]
-
-    if data_path is not None:
-        # Load real data
-        df = pd.read_csv(data_path)
-        print(f"Loaded {len(df)} rows from {data_path}")
+    if sql_query is not None:
+        # Load from SQL Server (mirrors server-side pattern)
+        print("Loading from SQL Server...")
+        X, y, encoders, scaler, feature_names, df = load_and_prepare_from_sql(
+            query=sql_query,
+            model_name=model_name,
+            target_column=target_column,
+            config_path=config_path,
+            conn_str=conn_str,
+        )
+    elif data_path is not None:
+        # Load from CSV file
+        print(f"Loading from CSV: {data_path}")
+        X, y, encoders, scaler, feature_names, df = load_and_prepare_from_csv(
+            csv_path=data_path,
+            model_name=model_name,
+            target_column=target_column,
+            config_path=config_path,
+        )
     else:
         # Generate synthetic demo data matching the feature schema
-        print("No data_path provided — generating synthetic demo data...")
+        print("No data source provided — generating synthetic demo data...")
+        feature_config = load_feature_config(config_path)
+        model_cfg = feature_config[model_name]
+        dummy_columns = model_cfg["dummy_feature_columns"]
+        additional_columns = model_cfg["additional_feature_columns"]
+
         df = _generate_synthetic_data(dummy_columns, additional_columns, target_column)
         print(f"Generated {len(df)} synthetic samples")
 
-    # ------------------------------------------------------------------
-    # 2. Prepare features using feature_columns.json
-    # ------------------------------------------------------------------
-    X, y, encoders, scaler, feature_names = prepare_features(
-        df=df,
-        model_name=model_name,
-        config_path=config_path,
-        target_column=target_column,
-        fit_encoders=True,
-    )
+        X, y, encoders, scaler, feature_names = prepare_features(
+            df=df,
+            model_name=model_name,
+            config_path=config_path,
+            target_column=target_column,
+            fit_encoders=True,
+            build_derived=False,  # Synthetic data already has the right columns
+        )
 
     n_classes = len(np.unique(y))
     input_dim = X.shape[1]
@@ -88,7 +111,7 @@ def main(
     print(f"  Class distribution: {np.bincount(y)}")
 
     # ------------------------------------------------------------------
-    # 3. Define model architecture config
+    # 2. Define model architecture config
     # ------------------------------------------------------------------
     # Scale hidden layer sizes relative to input dimension
     model_config = {
@@ -103,7 +126,7 @@ def main(
     }
 
     # ------------------------------------------------------------------
-    # 4. Define training config
+    # 3. Define training config
     # ------------------------------------------------------------------
     train_config = {
         "epochs": 100,
@@ -115,7 +138,7 @@ def main(
     }
 
     # ------------------------------------------------------------------
-    # 5. Run cross-validation
+    # 4. Run cross-validation
     # ------------------------------------------------------------------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"\nUsing device: {device}")
@@ -135,7 +158,7 @@ def main(
     )
 
     # ------------------------------------------------------------------
-    # 6. Train final model on full dataset
+    # 5. Train final model on full dataset
     # ------------------------------------------------------------------
     print("\n\nTraining final model on full dataset...")
 
@@ -162,7 +185,7 @@ def main(
     )
 
     # ------------------------------------------------------------------
-    # 7. Save model + metadata for inference
+    # 6. Save model + metadata for inference
     # ------------------------------------------------------------------
     save_path = f"trained_model_{model_name}.pt"
     torch.save(
@@ -199,8 +222,8 @@ def _generate_synthetic_data(
     n_classes: int = 2,
 ) -> pd.DataFrame:
     """
-    Generate synthetic DataFrame that matches the feature_columns.json schema.
-    Used for testing when real data isn't available.
+    Generate synthetic DataFrame matching the feature_columns.json schema.
+    Used for testing when no SQL/CSV data is available.
     """
     np.random.seed(42)
     data = {}
@@ -232,7 +255,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--data", type=str, default=None,
-        help="Path to CSV data file (optional, uses synthetic data if not provided)",
+        help="Path to CSV data file",
+    )
+    parser.add_argument(
+        "--sql", type=str, default=None,
+        help="SQL query to load training data from the server",
+    )
+    parser.add_argument(
+        "--conn-str", type=str, default=None,
+        help="Override pyodbc connection string",
     )
     parser.add_argument(
         "--config", type=str, default="feature_columns.json",
@@ -247,6 +278,8 @@ if __name__ == "__main__":
     main(
         model_name=args.model,
         data_path=args.data,
+        sql_query=args.sql,
+        conn_str=getattr(args, "conn_str", None),
         config_path=args.config,
         target_column=args.target,
     )
