@@ -1,13 +1,16 @@
 """
 Inference Script — Load trained model and predict on new data
 --------------------------------------------------------------
+Supports both SQL Server and CSV data loading (mirrors server-side pattern).
 Uses the saved encoders + scaler from training to transform new data
-through the same feature pipeline, then runs the model.
+through the same feature pipeline, then runs the neural network.
 
 Usage:
     python inference.py --model etac --data new_data.csv
+    python inference.py --model dccs --sql "SELECT * FROM vw_dccs_prediction"
     python inference.py --model dccs --data new_data.csv --checkpoint trained_model_dccs.pt
 """
+from __future__ import annotations
 
 import json
 import numpy as np
@@ -17,7 +20,13 @@ from datetime import datetime
 from sklearn.preprocessing import StandardScaler
 
 from model import FlexibleMLP
-from data_loader import load_feature_config, prepare_features
+from data_loader import (
+    load_feature_config,
+    load_from_sql,
+    load_from_csv,
+    prepare_features,
+    build_derived_columns,
+)
 
 
 def load_trained_model(checkpoint_path: str, device: torch.device = None):
@@ -57,7 +66,7 @@ def predict(
     device: torch.device = None,
 ) -> pd.DataFrame:
     """
-    Run inference on new data.
+    Run inference on new data (DataFrame already loaded).
 
     Parameters
     ----------
@@ -90,10 +99,11 @@ def predict(
     scaler.var_ = checkpoint["scaler_scale"] ** 2
     scaler.n_features_in_ = len(checkpoint["scaler_mean"])
 
-    # Get saved encoders
+    # Get saved encoders (category mappings + label encoder)
     encoders = checkpoint["encoders"]
 
     # Prepare features using the SAME encoders/scaler from training
+    # This applies derived columns, binary feature matrix, column alignment, and scaling
     X, _, _, _, feature_names = prepare_features(
         df=df,
         model_name=model_name,
@@ -102,6 +112,7 @@ def predict(
         fit_encoders=False,
         encoders=encoders,
         scaler=scaler,
+        build_derived=True,  # Build Month_Due, Routed_Late, etc.
     )
 
     # Run inference
@@ -132,11 +143,90 @@ def predict(
 
     # Only keep columns that exist in the result
     output_cols = [c for c in published_columns if c in result_df.columns]
-    # Add confidence as a bonus column
     if "PREDICTION_CONFIDENCE" not in output_cols:
         output_cols.append("PREDICTION_CONFIDENCE")
 
     return result_df[output_cols]
+
+
+def predict_from_sql(
+    query: str,
+    model_name: str,
+    checkpoint_path: str,
+    conn_str: str = None,
+    config_path: str = "feature_columns.json",
+    device: torch.device = None,
+) -> pd.DataFrame:
+    """
+    Load data from SQL Server and run predictions.
+    Mirrors the server-side load_model_and_predict function.
+
+    Parameters
+    ----------
+    query : str
+        SQL query to get prediction data.
+    model_name : str
+        Model target (etac, dccs, csdt).
+    checkpoint_path : str
+        Path to .pt checkpoint.
+    conn_str : str or None
+        Override connection string. Built from .env if None.
+    config_path : str
+        Path to feature_columns.json.
+    device : torch.device or None
+
+    Returns
+    -------
+    pd.DataFrame with published columns + predictions.
+    """
+    print("Getting prediction data from SQL Server...")
+    df = load_from_sql(query, model_name, conn_str=conn_str)
+    print(f"Loaded {len(df)} rows for prediction")
+    print(df.head())
+
+    return predict(
+        df=df,
+        model_name=model_name,
+        checkpoint_path=checkpoint_path,
+        config_path=config_path,
+        device=device,
+    )
+
+
+def predict_from_csv(
+    csv_path: str,
+    model_name: str,
+    checkpoint_path: str,
+    config_path: str = "feature_columns.json",
+    device: torch.device = None,
+) -> pd.DataFrame:
+    """
+    Load data from CSV and run predictions.
+
+    Parameters
+    ----------
+    csv_path : str
+        Path to the CSV file.
+    model_name : str
+        Model target (etac, dccs, csdt).
+    checkpoint_path : str
+        Path to .pt checkpoint.
+    config_path : str
+        Path to feature_columns.json.
+    device : torch.device or None
+
+    Returns
+    -------
+    pd.DataFrame with published columns + predictions.
+    """
+    df = load_from_csv(csv_path)
+    return predict(
+        df=df,
+        model_name=model_name,
+        checkpoint_path=checkpoint_path,
+        config_path=config_path,
+        device=device,
+    )
 
 
 if __name__ == "__main__":
@@ -149,8 +239,16 @@ if __name__ == "__main__":
         help="Model target",
     )
     parser.add_argument(
-        "--data", type=str, required=True,
+        "--data", type=str, default=None,
         help="Path to CSV data file for prediction",
+    )
+    parser.add_argument(
+        "--sql", type=str, default=None,
+        help="SQL query to load prediction data from the server",
+    )
+    parser.add_argument(
+        "--conn-str", type=str, default=None,
+        help="Override pyodbc connection string",
     )
     parser.add_argument(
         "--checkpoint", type=str, default=None,
@@ -169,17 +267,24 @@ if __name__ == "__main__":
     checkpoint_path = args.checkpoint or f"trained_model_{args.model}.pt"
     output_path = args.output or f"predictions_{args.model}.csv"
 
-    # Load data
-    df = pd.read_csv(args.data)
-    print(f"Loaded {len(df)} rows from {args.data}")
-
-    # Run predictions
-    predictions_df = predict(
-        df=df,
-        model_name=args.model,
-        checkpoint_path=checkpoint_path,
-        config_path=args.config,
-    )
+    # Run predictions from SQL or CSV
+    if args.sql is not None:
+        predictions_df = predict_from_sql(
+            query=args.sql,
+            model_name=args.model,
+            checkpoint_path=checkpoint_path,
+            conn_str=args.conn_str,
+            config_path=args.config,
+        )
+    elif args.data is not None:
+        predictions_df = predict_from_csv(
+            csv_path=args.data,
+            model_name=args.model,
+            checkpoint_path=checkpoint_path,
+            config_path=args.config,
+        )
+    else:
+        parser.error("Provide either --data (CSV path) or --sql (SQL query)")
 
     # Save results
     predictions_df.to_csv(output_path, index=False)
