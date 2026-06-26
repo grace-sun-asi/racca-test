@@ -190,7 +190,7 @@ def train_mlp(model, X_train, y_train, X_val=None, y_val=None,
 def cross_validate_ensemble(
     df, model_name, config_path="feature_columns.json",
     target_column="PREDICTION", n_folds=5,
-    catboost_weight=0.3, mlp_weight=0.7,
+    catboost_weight=0.6, mlp_weight=0.4,
     catboost_params=None, mlp_epochs=100, verbose=True,
 ):
     """Stratified K-Fold CV comparing CatBoost, MLP, and Ensemble."""
@@ -285,7 +285,7 @@ def cross_validate_ensemble(
 
 def train_and_save_ensemble(
     df, model_name, config_path="feature_columns.json",
-    target_column="PREDICTION", catboost_weight=0.3, mlp_weight=0.7,
+    target_column="PREDICTION", catboost_weight=0.6, mlp_weight=0.4,
     catboost_params=None, mlp_epochs=100, save_path=None, verbose=True,
 ):
     """Train CatBoost + MLP on full dataset and save both models."""
@@ -304,11 +304,10 @@ def train_and_save_ensemble(
 
     # --- Train CatBoost (primary) ---
     cb_params = catboost_params or {
-        "iterations": 1500, "learning_rate": 0.03, "depth": 7,
+        "iterations": 800, "learning_rate": 0.03, "depth": 6,
         "l2_leaf_reg": 3.0, "random_seed": 42,
         "verbose": 50 if verbose else 0,
         "eval_metric": "Accuracy", "auto_class_weights": "Balanced",
-        "early_stopping_rounds": 50,
     }
     cb_model = CatBoostClassifier(**cb_params)
     cb_model.fit(Pool(X_cat, y, cat_features=cat_indices))
