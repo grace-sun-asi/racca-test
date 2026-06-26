@@ -44,10 +44,13 @@
             "Major_Model", 
             "M/M_Change_Type", 
             "M/M_Prime_Engineer_Name", 
+            "Determination_Level",
+            "MM_Determination_Routing_Status",
             "Month_Due"
         ], 
         "additional_feature_columns": [
-            "Routed_Late"
+            "Routed_Late",
+            "Days_Until_Due"
         ],
         "published_columns": [
             "CHANGE_ID",

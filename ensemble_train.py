@@ -190,7 +190,7 @@ def train_mlp(model, X_train, y_train, X_val=None, y_val=None,
 def cross_validate_ensemble(
     df, model_name, config_path="feature_columns.json",
     target_column="PREDICTION", n_folds=5,
-    catboost_weight=0.6, mlp_weight=0.4,
+    catboost_weight=0.3, mlp_weight=0.7,
     catboost_params=None, mlp_epochs=100, verbose=True,
 ):
     """Stratified K-Fold CV comparing CatBoost, MLP, and Ensemble."""
@@ -215,10 +215,10 @@ def cross_validate_ensemble(
 
         # --- CatBoost ---
         cb_params = catboost_params or {
-            "iterations": 500, "learning_rate": 0.05, "depth": 6,
+            "iterations": 1500, "learning_rate": 0.03, "depth": 7,
             "l2_leaf_reg": 3.0, "random_seed": 42, "verbose": 0,
             "eval_metric": "Accuracy", "auto_class_weights": "Balanced",
-            "early_stopping_rounds": 30,
+            "early_stopping_rounds": 50,
         }
         cb = CatBoostClassifier(**cb_params)
         cb.fit(
@@ -285,7 +285,7 @@ def cross_validate_ensemble(
 
 def train_and_save_ensemble(
     df, model_name, config_path="feature_columns.json",
-    target_column="PREDICTION", catboost_weight=0.6, mlp_weight=0.4,
+    target_column="PREDICTION", catboost_weight=0.3, mlp_weight=0.7,
     catboost_params=None, mlp_epochs=100, save_path=None, verbose=True,
 ):
     """Train CatBoost + MLP on full dataset and save both models."""
@@ -304,10 +304,11 @@ def train_and_save_ensemble(
 
     # --- Train CatBoost (primary) ---
     cb_params = catboost_params or {
-        "iterations": 800, "learning_rate": 0.03, "depth": 6,
+        "iterations": 1500, "learning_rate": 0.03, "depth": 7,
         "l2_leaf_reg": 3.0, "random_seed": 42,
         "verbose": 50 if verbose else 0,
         "eval_metric": "Accuracy", "auto_class_weights": "Balanced",
+        "early_stopping_rounds": 50,
     }
     cb_model = CatBoostClassifier(**cb_params)
     cb_model.fit(Pool(X_cat, y, cat_features=cat_indices))
@@ -490,8 +491,8 @@ if __name__ == "__main__":
         help="Target column name",
     )
     parser.add_argument("--config", type=str, default="feature_columns.json")
-    parser.add_argument("--catboost-weight", type=float, default=0.6)
-    parser.add_argument("--mlp-weight", type=float, default=0.4)
+    parser.add_argument("--catboost-weight", type=float, default=0.3)
+    parser.add_argument("--mlp-weight", type=float, default=0.7)
     parser.add_argument(
         "--cv-only", action="store_true",
         help="Only run cross-validation, skip final model training",

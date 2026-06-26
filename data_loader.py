@@ -59,7 +59,7 @@ MAX_CATEGORIES_PER_COLUMN = {
     "Customer": 15,
 }
 
-MAX_SAMPLE_ROWS = 50000
+MAX_SAMPLE_ROWS = 1000000
 
 
 # =============================================================================
@@ -165,6 +165,18 @@ def _build_dccs_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
     if "Monthly_ByDueOrClose" in df.columns:
         df["Monthly_ByDueOrClose"] = pd.to_datetime(df["Monthly_ByDueOrClose"], errors="coerce")
         df["Month_Due"] = df["Monthly_ByDueOrClose"].dt.month_name()
+
+    # Days_Until_Due: numeric days between M/M_Form_Review_Due and today (or due date)
+    if "M/M_Form_Review_Due" in df.columns:
+        df["M/M_Form_Review_Due"] = pd.to_datetime(df["M/M_Form_Review_Due"], errors="coerce")
+        if "Monthly_ByDueOrClose" in df.columns:
+            df["Days_Until_Due"] = (
+                df["M/M_Form_Review_Due"] - df["Monthly_ByDueOrClose"]
+            ).dt.days.fillna(0).astype(int)
+        else:
+            df["Days_Until_Due"] = (
+                df["M/M_Form_Review_Due"] - pd.Timestamp.now()
+            ).dt.days.fillna(0).astype(int)
 
     # Routed_Late binary flag
     if "Complete_Status" in df.columns:
