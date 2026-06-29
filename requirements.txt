@@ -6,3 +6,4 @@ pyodbc>=5.0.0
 python-dotenv>=1.0.0
 optuna>=3.4.0
 catboost>=1.2.0
+tqdm>=4.65.0

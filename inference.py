@@ -1,61 +1,65 @@
 """
-Inference Script — Load trained model and predict on new data
---------------------------------------------------------------
-Supports both SQL Server and CSV data loading (mirrors server-side pattern).
-Uses the saved encoders + scaler from training to transform new data
-through the same feature pipeline, then runs the neural network.
+Inference — Load saved ensemble and predict on new data.
 
 Usage:
-    python inference.py --model etac --data new_data.csv
-    python inference.py --model dccs --sql "SELECT * FROM vw_dccs_prediction"
-    python inference.py --model dccs --data new_data.csv --checkpoint trained_model_dccs.pt
+    python inference.py --model dccs --data new_data.csv
+    python inference.py --model dccs --data new_data.csv --checkpoint ensemble_model_dccs.pt
 """
 from __future__ import annotations
 
-import json
 import numpy as np
 import pandas as pd
 import torch
 from datetime import datetime
 from sklearn.preprocessing import StandardScaler
+from catboost import CatBoostClassifier
 
 from model import FlexibleMLP
-from data_loader import (
-    load_feature_config,
-    load_from_sql,
-    load_from_csv,
-    prepare_features,
-    build_derived_columns,
-)
+from data_loader import load_feature_config, load_from_csv, load_from_sql, prepare_data
 
 
-def load_trained_model(checkpoint_path: str, device: torch.device = None):
+def load_ensemble(checkpoint_path: str, device: torch.device = None):
     """
-    Load a trained model from checkpoint.
+    Load a saved ensemble (CatBoost + MLP) from checkpoint.
 
-    Returns
-    -------
-    model : FlexibleMLP
-    checkpoint : dict (contains encoders, scaler, feature_names, etc.)
+    Returns dict with: catboost, mlp, config (weights, encoders, scaler, etc.)
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    model = FlexibleMLP(
-        input_dim=checkpoint["input_dim"],
-        hidden_dims=checkpoint["model_config"]["hidden_dims"],
-        output_dim=checkpoint["output_dim"],
-        activation=checkpoint["model_config"]["activation"],
-        dropout=checkpoint["model_config"]["dropout"],
-        batch_norm=checkpoint["model_config"]["batch_norm"],
+    # Rebuild MLP
+    mlp = FlexibleMLP(
+        input_dim=ckpt["mlp_input_dim"],
+        hidden_dims=ckpt["mlp_hidden_dims"],
+        output_dim=ckpt["n_classes"],
+        activation="relu", dropout=0.2, batch_norm=True,
     )
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.to(device)
-    model.eval()
+    mlp.load_state_dict(ckpt["mlp_state_dict"])
+    mlp.to(device).eval()
 
-    return model, checkpoint
+    # Rebuild CatBoost
+    cb = CatBoostClassifier()
+    cb.load_model(ckpt["catboost_path"])
+
+    # Rebuild scaler
+    scaler = StandardScaler()
+    scaler.mean_ = ckpt["scaler_mean"]
+    scaler.scale_ = ckpt["scaler_scale"]
+    scaler.var_ = ckpt["scaler_scale"] ** 2
+    scaler.n_features_in_ = len(ckpt["scaler_mean"])
+
+    return {
+        "catboost": cb,
+        "mlp": mlp,
+        "device": device,
+        "encoders": ckpt["encoders"],
+        "scaler": scaler,
+        "catboost_weight": ckpt["catboost_weight"],
+        "model_name": ckpt["model_name"],
+        "n_classes": ckpt["n_classes"],
+    }
 
 
 def predict(
@@ -63,232 +67,89 @@ def predict(
     model_name: str,
     checkpoint_path: str,
     config_path: str = "feature_columns.json",
-    device: torch.device = None,
 ) -> pd.DataFrame:
     """
-    Run inference on new data (DataFrame already loaded).
+    Run ensemble inference on new data.
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        New data with the same columns as training data.
-    model_name : str
-        Model target name (etac, dccs, csdt).
-    checkpoint_path : str
-        Path to saved .pt checkpoint.
-    config_path : str
-        Path to feature_columns.json.
-    device : torch.device or None
-
-    Returns
-    -------
-    pd.DataFrame
-        Original data with PREDICTION, PREDICTION_CONFIDENCE, and PredictionDate
-        columns added, filtered to the published_columns from feature_columns.json.
+    Returns DataFrame with PREDICTION, PREDICTION_CONFIDENCE, PredictionDate added,
+    filtered to published_columns from feature_columns.json.
     """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ensemble = load_ensemble(checkpoint_path)
+    device = ensemble["device"]
+    catboost_weight = ensemble["catboost_weight"]
+    mlp_weight = 1.0 - catboost_weight
 
-    # Load model and saved preprocessing artifacts
-    model, checkpoint = load_trained_model(checkpoint_path, device)
-
-    # Reconstruct scaler from saved parameters
-    scaler = StandardScaler()
-    scaler.mean_ = checkpoint["scaler_mean"]
-    scaler.scale_ = checkpoint["scaler_scale"]
-    scaler.var_ = checkpoint["scaler_scale"] ** 2
-    scaler.n_features_in_ = len(checkpoint["scaler_mean"])
-
-    # Get saved encoders (category mappings + label encoder)
-    encoders = checkpoint["encoders"]
-
-    # Prepare features using the SAME encoders/scaler from training
-    # This applies derived columns, binary feature matrix, column alignment, and scaling
-    X, _, _, _, feature_names = prepare_features(
-        df=df,
-        model_name=model_name,
-        config_path=config_path,
-        target_column="__none__",  # No target needed for inference
-        fit_encoders=False,
-        encoders=encoders,
-        scaler=scaler,
-        build_derived=True,  # Build Month_Due, Routed_Late, etc.
+    # Prepare features using saved encoders/scaler
+    data = prepare_data(
+        df, model_name, target_column="__none__",
+        config_path=config_path, fit=False,
+        encoders=ensemble["encoders"], scaler=ensemble["scaler"],
     )
 
-    # Run inference
-    X_tensor = torch.FloatTensor(X).to(device)
+    X_cat, X_mlp = data["X_cat"], data["X_mlp"]
 
+    # CatBoost predictions
+    proba_cat = ensemble["catboost"].predict_proba(X_cat)
+
+    # MLP predictions
     with torch.no_grad():
-        logits = model(X_tensor)
-        probabilities = torch.softmax(logits, dim=1)
-        predictions = torch.argmax(probabilities, dim=1).cpu().numpy()
-        confidence = probabilities.max(dim=1).values.cpu().numpy()
+        logits = ensemble["mlp"](torch.FloatTensor(X_mlp).to(device))
+        proba_mlp = torch.softmax(logits, dim=1).cpu().numpy()
 
-    # Decode predictions back to original labels if a label encoder was used
+    # Ensemble
+    proba = catboost_weight * proba_cat + mlp_weight * proba_mlp
+    predictions = np.argmax(proba, axis=1)
+    confidence = proba.max(axis=1)
+
+    # Decode labels
+    encoders = ensemble["encoders"]
     if "__label_encoder__" in encoders:
-        label_enc = encoders["__label_encoder__"]
-        prediction_labels = label_enc.inverse_transform(predictions)
+        prediction_labels = encoders["__label_encoder__"].inverse_transform(predictions)
     else:
         prediction_labels = predictions
 
-    # Attach predictions to the DataFrame
-    result_df = df.copy()
-    result_df["PREDICTION"] = prediction_labels
-    result_df["PREDICTION_CONFIDENCE"] = np.round(confidence, 4)
-    result_df["PredictionDate"] = datetime.now().strftime("%Y-%m-%d")
+    # Build result
+    result = df.copy()
+    result["PREDICTION"] = prediction_labels
+    result["PREDICTION_CONFIDENCE"] = np.round(confidence, 4)
+    result["PredictionDate"] = datetime.now().strftime("%Y-%m-%d")
 
-    # Filter to published columns from feature_columns.json
-    feature_config = load_feature_config(config_path)
-    published_columns = feature_config[model_name]["published_columns"]
-
-    # Only keep columns that exist in the result
-    output_cols = [c for c in published_columns if c in result_df.columns]
+    # Filter to published columns
+    config = load_feature_config(config_path)
+    published = config[model_name].get("published_columns", [])
+    output_cols = [c for c in published if c in result.columns]
     if "PREDICTION_CONFIDENCE" not in output_cols:
         output_cols.append("PREDICTION_CONFIDENCE")
 
-    return result_df[output_cols]
-
-
-def predict_from_sql(
-    query: str,
-    model_name: str,
-    checkpoint_path: str,
-    conn_str: str = None,
-    config_path: str = "feature_columns.json",
-    device: torch.device = None,
-) -> pd.DataFrame:
-    """
-    Load data from SQL Server and run predictions.
-    Mirrors the server-side load_model_and_predict function.
-
-    Parameters
-    ----------
-    query : str
-        SQL query to get prediction data.
-    model_name : str
-        Model target (etac, dccs, csdt).
-    checkpoint_path : str
-        Path to .pt checkpoint.
-    conn_str : str or None
-        Override connection string. Built from .env if None.
-    config_path : str
-        Path to feature_columns.json.
-    device : torch.device or None
-
-    Returns
-    -------
-    pd.DataFrame with published columns + predictions.
-    """
-    print("Getting prediction data from SQL Server...")
-    df = load_from_sql(query, model_name, conn_str=conn_str)
-    print(f"Loaded {len(df)} rows for prediction")
-    print(df.head())
-
-    return predict(
-        df=df,
-        model_name=model_name,
-        checkpoint_path=checkpoint_path,
-        config_path=config_path,
-        device=device,
-    )
-
-
-def predict_from_csv(
-    csv_path: str,
-    model_name: str,
-    checkpoint_path: str,
-    config_path: str = "feature_columns.json",
-    device: torch.device = None,
-) -> pd.DataFrame:
-    """
-    Load data from CSV and run predictions.
-
-    Parameters
-    ----------
-    csv_path : str
-        Path to the CSV file.
-    model_name : str
-        Model target (etac, dccs, csdt).
-    checkpoint_path : str
-        Path to .pt checkpoint.
-    config_path : str
-        Path to feature_columns.json.
-    device : torch.device or None
-
-    Returns
-    -------
-    pd.DataFrame with published columns + predictions.
-    """
-    df = load_from_csv(csv_path)
-    return predict(
-        df=df,
-        model_name=model_name,
-        checkpoint_path=checkpoint_path,
-        config_path=config_path,
-        device=device,
-    )
+    return result[output_cols]
 
 
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run MLP inference on new data")
-    parser.add_argument(
-        "--model", type=str, required=True,
-        choices=["etac", "dccs", "csdt"],
-        help="Model target",
-    )
-    parser.add_argument(
-        "--data", type=str, default=None,
-        help="Path to CSV data file for prediction",
-    )
-    parser.add_argument(
-        "--sql", type=str, default=None,
-        help="SQL query to load prediction data from the server",
-    )
-    parser.add_argument(
-        "--conn-str", type=str, default=None,
-        help="Override pyodbc connection string",
-    )
-    parser.add_argument(
-        "--checkpoint", type=str, default=None,
-        help="Path to .pt model checkpoint (default: trained_model_<model>.pt)",
-    )
-    parser.add_argument(
-        "--config", type=str, default="feature_columns.json",
-        help="Path to feature_columns.json",
-    )
-    parser.add_argument(
-        "--output", type=str, default=None,
-        help="Path to save predictions CSV (default: predictions_<model>.csv)",
-    )
+    parser = argparse.ArgumentParser(description="Ensemble Inference")
+    parser.add_argument("--model", type=str, required=True, choices=["etac", "dccs", "csdt"])
+    parser.add_argument("--data", type=str, default=None, help="CSV file for prediction")
+    parser.add_argument("--sql", type=str, default=None, help="SQL query for prediction data")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to .pt checkpoint")
+    parser.add_argument("--config", type=str, default="feature_columns.json")
+    parser.add_argument("--output", type=str, default=None, help="Output CSV path")
     args = parser.parse_args()
 
-    checkpoint_path = args.checkpoint or f"trained_model_{args.model}.pt"
+    checkpoint = args.checkpoint or f"ensemble_model_{args.model}.pt"
     output_path = args.output or f"predictions_{args.model}.csv"
 
-    # Run predictions from SQL or CSV
-    if args.sql is not None:
-        predictions_df = predict_from_sql(
-            query=args.sql,
-            model_name=args.model,
-            checkpoint_path=checkpoint_path,
-            conn_str=args.conn_str,
-            config_path=args.config,
-        )
-    elif args.data is not None:
-        predictions_df = predict_from_csv(
-            csv_path=args.data,
-            model_name=args.model,
-            checkpoint_path=checkpoint_path,
-            config_path=args.config,
-        )
+    # Load data
+    if args.sql:
+        df = load_from_sql(args.sql, args.model)
+    elif args.data:
+        df = load_from_csv(args.data)
     else:
-        parser.error("Provide either --data (CSV path) or --sql (SQL query)")
+        raise ValueError("Provide --data or --sql")
 
-    # Save results
-    predictions_df.to_csv(output_path, index=False)
-    print(f"\nPredictions saved to '{output_path}'")
-    print(f"Columns: {list(predictions_df.columns)}")
-    print(f"\nSample predictions:")
-    print(predictions_df.head(10).to_string())
+    # Predict
+    results = predict(df, args.model, checkpoint, args.config)
+    results.to_csv(output_path, index=False)
+    print(f"\nPredictions saved to {output_path}")
+    print(f"  Rows: {len(results)}")
+    print(f"  Predictions: {results['PREDICTION'].value_counts().to_dict()}")

@@ -1,4 +1,63 @@
-[metadata]
-user_id = "3825073"
-issue_type = "bug_report"
-context = "page_help"
+model_provider = "litellm"
+
+check_for_update_on_startup = false
+
+web_search = "disabled" # sets default to disable live web search (only enable if you know what you're doing)
+ 
+model = "gpt-5.4-mini" # update as needed, depending on your access level to models, and the information types being used
+ 
+# Disable OTEL / Analytics
+
+[analytics]
+
+enabled = false
+ 
+[feedback]
+
+enabled = false
+ 
+[history]
+
+persistence = "none"  # or save-all
+
+max_bytes = 104857600 # 100 MiB
+ 
+[model_providers.litellm]
+
+name = "BCAI Proxy"
+
+base_url = "https://bcai-openai-proxy-test.taspre-phx.apps.boeing.com"
+
+env_key = "BCAI_PAT"
+
+requires_openai_auth = false # Important: bypasses standard OpenAI login
+ 
+[tui]
+
+status_line = ["current-dir", "git-branch", "model-with-reasoning", "context-window-size", "context-usage", "used-tokens", "total-output-tokens", "total-input-tokens"]
+
+terminal_title = ["spinner", "app-name", "project"]
+ 
+[tui.model_availability_nux]
+
+"gpt-5.5" = 4
+ 
+[projects.'c:\users\le040f']
+
+trust_level = "trusted"
+ 
+[projects.'c:\users\le040f\desktop\asi_bi\projects\standardization efforts\codex']
+
+trust_level = "trusted"
+ 
+[projects.'c:\windows\system32']
+
+trust_level = "trusted"
+ 
+[projects.'c:\users\eg814f']
+
+trust_level = "trusted"
+ 
+[windows]
+
+sandbox = "elevated"
