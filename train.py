@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
 from catboost import CatBoostClassifier, Pool
 from copy import deepcopy
 from tqdm import tqdm
@@ -97,6 +97,7 @@ def cross_validate_catboost(
     """Stratified K-Fold CV for CatBoost only. Fast — no MLP overhead."""
     X_cat, y = data["X_cat"], data["y"]
     cat_indices = data["cat_indices"]
+    encoders = data["encoders"]
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
 
     cb_params = catboost_params or {
@@ -107,6 +108,7 @@ def cross_validate_catboost(
     }
 
     accuracies, f1_scores = [], []
+    all_y_true, all_y_pred = [], []
 
     fold_iter = tqdm(
         enumerate(skf.split(X_cat, y)),
@@ -130,15 +132,35 @@ def cross_validate_catboost(
         accuracies.append(acc)
         f1_scores.append(f1)
 
+        all_y_true.extend(y[va_idx])
+        all_y_pred.extend(preds)
+
         fold_elapsed = time.time() - fold_start
         fold_iter.set_postfix({"acc": f"{acc:.4f}", "f1": f"{f1:.4f}", "time": f"{fold_elapsed:.0f}s"})
 
+    # Get class names for reporting
+    if "__label_encoder__" in encoders:
+        class_names = list(encoders["__label_encoder__"].classes_)
+    else:
+        class_names = [str(i) for i in range(len(np.unique(y)))]
+
     if verbose:
-        print(f"\n{'='*50}")
+        print(f"\n{'='*60}")
         print(f"CV RESULTS — CatBoost ({n_folds} folds)")
+        print(f"{'='*60}")
         print(f"  Accuracy: {np.mean(accuracies):.4f} +/- {np.std(accuracies):.4f}")
         print(f"  F1:       {np.mean(f1_scores):.4f} +/- {np.std(f1_scores):.4f}")
-        print(f"{'='*50}")
+        print(f"\n  Per-Class Report:")
+        print(classification_report(all_y_true, all_y_pred, target_names=class_names, digits=4))
+        print(f"  Confusion Matrix:")
+        cm = confusion_matrix(all_y_true, all_y_pred)
+        # Header
+        header = "  Predicted →  " + "  ".join(f"{n:>12}" for n in class_names)
+        print(header)
+        for i, row in enumerate(cm):
+            row_str = "  ".join(f"{v:>12}" for v in row)
+            print(f"  Actual {class_names[i]:<12} {row_str}")
+        print(f"{'='*60}")
 
     return {"accuracies": accuracies, "f1_scores": f1_scores}
 
